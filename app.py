@@ -3,8 +3,9 @@
 #Imports
 import pymongo
 from pydantic import BaseModel
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, status
 from bson import ObjectId
+from typing import Optional
 
 app = FastAPI()
 
@@ -17,9 +18,9 @@ basedD = client['ToDoList']
 collection = basedD['tasks']
 #Esquema
 class Task(BaseModel):
-   id: str
+   id: Optional[str]="_id"
    task: str
-   isDone: str
+   isDone: Optional[str]="false"
 
 """{
   "id": "id",
@@ -27,11 +28,14 @@ class Task(BaseModel):
   "isDone": "password"
 }"""
 
-def userSchema(task) -> dict:
-   print(task)
-   return {"_id": str(task["id"]),
-            "task": task["task"],
-            "isDone": task["isDone"]}
+def task_schema(task) -> dict:
+    return {"id": str(task["_id"]),
+        "task": task["task"],
+        "isDone": task["isDone"]}
+
+
+def tasks_schema(tasks) -> list:
+    return [task_schema(task) for task in tasks]
 
 #Funciones
 #find
@@ -39,36 +43,54 @@ def userSchema(task) -> dict:
 async def read_root():
    return {"API": "ToDoList"}
 
-@app.get("/tasks/")
+@app.get("/tasks/", response_model=list[Task])
 async def getTasks():
-      data = {}
-      for u in collection.find({}):
-          data[str(u["_id"])] = u
-      return data
+      return tasks_schema(collection.find())
 
-@app.get("/one-task/{itemId}")
+@app.get("/one-task/{itemId}", response_model=Task)
 async def getOneTask(itemId:str):
-      data = collection.find_one({itemId})
-      return data
+      return search_task("_id", ObjectId(itemId))
 
-@app.post("/post-task/")
+@app.post("/post-task/", response_model=Task, status_code=status.HTTP_201_CREATED)
 async def postTask(modelo:Task):
-   dict_modelo = dict(modelo)
-   idValue= dict_modelo["id"]
-   dict_modelo.pop("id")
-   dict_modelo["_id"]=idValue
+    if type(search_task("task",modelo.task)) == Task:
+        raise HTTPException(status_code = status.HTTP_404_NOT_FOUND, detail="La tarea ya existe")
+    task_dict = dict(modelo)
+    del task_dict["id"]
+    id = collection.insert_one(task_dict).inserted_id
+    new_task = task_schema(collection.find_one({"_id":id}))
+    return Task(**new_task)
 
-   collection.insert_one(dict_modelo)
-
-@app.put("/put-task/{itemId}")
+@app.put("/put-task/{itemId}", response_model=Task)
 async def putTask(itemId:str, modelo:Task):
     dict_modelo = dict(modelo)
-    idValue= dict_modelo["id"]
-    dict_modelo.pop("id")
-    dict_modelo["_id"]=idValue
+    del dict_modelo["id"]
+    try:
+        collection.find_one_and_replace({"_id":ObjectId(modelo.id)},dict_modelo)
+    except:
+        return {"Error":"No se ha actualizado la tarea"}
+    return search_task("_id", ObjectId(modelo.id))
 
-    collection.find_one_and_replace({"_id":itemId},dict_modelo)
-
-@app.delete("/delete-task/{itemId}")
+@app.delete("/delete-task/{itemId}", status_code=status.HTTP_301_MOVED_PERMANENTLY)
 async def deleteTask(itemId:str):
-  collection.delete_one({"_id":itemId})
+  
+  found = collection.delete_one({"_id":ObjectId(itemId)})
+
+  if not found:
+      return {"Error":"No se ha encontrado la tarea"}
+
+@app.delete("/delete-all/", status_code=status.HTTP_205_RESET_CONTENT)
+async def deleteAllTask():
+  
+  found = collection.delete_many({})
+
+  if not found:
+      return {"Error":"No se han encontrado tareas"}
+
+
+def search_task(field: str, key):
+    try:
+        task = collection.find_one({field:key})
+        return Task(task_schema(task))
+    except:
+        return {"Error":"No se ha encontrado la tarea"}
