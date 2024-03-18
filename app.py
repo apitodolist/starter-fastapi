@@ -18,7 +18,7 @@ basedD = client['ToDoList']
 collection = basedD['tasks']
 #Esquema
 class Task(BaseModel):
-   id: Optional[str]="_id"
+   id: Optional[str]="opcional"
    task: str
    isDone: Optional[str]="false"
 
